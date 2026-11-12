@@ -7,12 +7,17 @@ All weights/builds are downloaded on the Colab runtime. No ComfyUI dependency.
 import hashlib
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import platform
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
+import threading
+import time
 
 NATIVE_KCPP_REF = "67399ec7d0c0d7e53d0ee1e940bcebd328b65ed5"
 NATIVE_SD_BASE = "73fef08224c50a49961004dc8c6fee2c0f640bcb"
@@ -49,23 +54,135 @@ def minimax_model_url(model):
     return f"https://huggingface.co/{model['repo_id']}/resolve/{model['revision']}/{model['source_filename']}"
 
 
-def native_file_sha256(path):
+def set_native_log_path(path, drive_root=None):
+    global NATIVE_LOG_PATH, NATIVE_LOG_STARTED, NATIVE_DRIVE_LOG_PATH
+    NATIVE_LOG_PATH = Path(path)
+    NATIVE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    NATIVE_LOG_STARTED = time.monotonic()
+    NATIVE_DRIVE_LOG_PATH = (Path(drive_root) / "logs" / f"session-{time.time_ns()}.log"
+                             if drive_root is not None else None)
+    native_log(f"Log trực tiếp trong cell; file đầy đủ: {NATIVE_LOG_PATH}")
+
+
+def native_log(message):
+    started = globals().get("NATIVE_LOG_STARTED")
+    prefix = f"[+{time.monotonic() - started:.1f}s] " if started is not None else ""
+    line = prefix + str(message).rstrip("\r\n")
+    print(line, flush=True)
+    path = globals().get("NATIVE_LOG_PATH")
+    if path is not None:
+        with Path(path).open("a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+
+
+def save_native_log():
+    source = globals().get("NATIVE_LOG_PATH")
+    target = globals().get("NATIVE_DRIVE_LOG_PATH")
+    if source is not None and target is not None:
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        except OSError as error:
+            print(f"Không sao lưu được log lên Drive: {error}", flush=True)
+
+
+@contextmanager
+def native_stage(label, heartbeat_seconds=15):
+    started = time.monotonic()
+    stopped = threading.Event()
+    native_log(f"BẮT ĐẦU: {label}")
+
+    def heartbeat():
+        while not stopped.wait(heartbeat_seconds):
+            native_log(f"{label}: đang chạy, đã {time.monotonic() - started:.0f}s; chưa kết thúc bước này.")
+
+    ticker = threading.Thread(target=heartbeat, daemon=True)
+    ticker.start()
+    try:
+        yield
+    except BaseException as error:
+        native_log(f"DỪNG/LỖI: {label} sau {time.monotonic() - started:.1f}s ({type(error).__name__}: {error})")
+        raise
+    else:
+        native_log(f"XONG: {label} sau {time.monotonic() - started:.1f}s")
+    finally:
+        stopped.set()
+        ticker.join(timeout=1)
+
+
+def run_logged_command(arguments, *, cwd=None, label=None, heartbeat_seconds=15):
+    """Pipe child output through Python so Colab actually displays it in the cell."""
+    command = [str(argument) for argument in arguments]
+    label = label or Path(command[0]).name
+    native_log(f"Lệnh: {shlex.join(command)}")
+    if cwd is not None:
+        native_log(f"Thư mục: {cwd}")
+    environment = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    # Also flush C/C++ stdout on Colab; Python's bufsize only affects the reader.
+    executable = command
+    if sys.platform == "linux" and shutil.which("stdbuf"):
+        executable = ["stdbuf", "-oL", "-eL", *command]
+    process = None
+    try:
+        with native_stage(label, heartbeat_seconds):
+            process = subprocess.Popen(executable, cwd=cwd, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, text=True, errors="replace",
+                                       bufsize=1, env=environment, start_new_session=True)
+            native_log(f"{label}: PID {process.pid}")
+            for line in process.stdout:
+                native_log(line)
+            returncode = process.wait()
+            native_log(f"{label}: exit code {returncode}")
+            if returncode:
+                native_log(f"Xem toàn bộ stdout/stderr tại: {globals().get('NATIVE_LOG_PATH', 'output của cell')}")
+                raise subprocess.CalledProcessError(returncode, command)
+            return subprocess.CompletedProcess(command, returncode)
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=5)
+            process.stdout.close()
+        save_native_log()
+
+
+def native_file_sha256(path, *, label=None):
+    path = Path(path)
     digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
+    total = path.stat().st_size
+    done = 0
+    last_report = time.monotonic()
+    if label:
+        native_log(f"{label}: đọc {total / 1e9:.2f} GB để kiểm tra SHA256")
+    with path.open("rb") as stream:
         while chunk := stream.read(8 * 1024 * 1024):
             digest.update(chunk)
+            done += len(chunk)
+            if label and time.monotonic() - last_report >= 10:
+                native_log(f"{label}: {done / 1e9:.2f}/{total / 1e9:.2f} GB ({100 * done / total:.1f}%)")
+                last_report = time.monotonic()
+    if label:
+        native_log(f"{label}: đã đọc xong {total / 1e9:.2f} GB")
     return digest.hexdigest()
 
 
 def native_download(url, target, expected_sha256):
     target = Path(target)
-    if target.is_file() and native_file_sha256(target) == expected_sha256:
+    if target.is_file() and native_file_sha256(target, label=target.name) == expected_sha256:
+        native_log(f"Dùng lại mã nguồn/patch: {target}")
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_suffix(target.suffix + ".part")
-    subprocess.run(["curl", "--fail", "--location", "--retry", "3", "--connect-timeout", "30",
-                    "--output", str(partial), url], check=True)
-    if native_file_sha256(partial) != expected_sha256:
+    run_logged_command(["curl", "--fail", "--location", "--retry", "3", "--connect-timeout", "30",
+                        "--output", str(partial), url], label=f"Tải {target.name}")
+    if native_file_sha256(partial, label=target.name) != expected_sha256:
         raise RuntimeError(f"SHA256 mã nguồn không khớp: {partial}")
     partial.replace(target)
     return target
@@ -103,8 +220,8 @@ def apply_native_sd_patch(source, original_patch):
     command = ["git", "apply", "--directory=otherarch/sdcpp",
                # KoboldCpp uses upstream ggml's CUDA implementation, not SD's custom kernels.
                "--exclude=otherarch/sdcpp/src/core/cuda/*", "--include=otherarch/sdcpp/src/*", str(adapted)]
-    subprocess.run(command[:2] + ["--check"] + command[2:], cwd=source, check=True)
-    subprocess.run(command, cwd=source, check=True)
+    run_logged_command(command[:2] + ["--check"] + command[2:], cwd=source, label="Kiểm tra patch H3 Image")
+    run_logged_command(command, cwd=source, label="Áp dụng patch H3 Image")
     adapt_native_api_compat(source)
     definition = Path(source) / "otherarch/sdcpp/src/model/integrations/minimax_h3.cpp"
     if "VERSION_MINIMAX_H3_IMAGE" not in definition.read_text():
@@ -114,7 +231,9 @@ def apply_native_sd_patch(source, original_patch):
 def minimax_build_info():
     # This preset targets L4 (SM 8.9). CUDA/libc identify compatible cached builds;
     # do not impose RAM/VRAM thresholds or preflight hardware eligibility checks.
+    native_log("Đọc phiên bản CUDA để chọn cache build.")
     toolkit = subprocess.run(["nvcc", "--version"], check=True, capture_output=True, text=True).stdout
+    native_log(toolkit.strip())
     return {"sm": "89", "cuda": hashlib.sha256(toolkit.encode()).hexdigest()[:12],
             "libc": list(platform.libc_ver()), "source": NATIVE_KCPP_REF, "sd": NATIVE_SD_REF, "recipe": 1}
 
@@ -130,29 +249,41 @@ def configure_minimax_stableui(runtime):
 
 
 def ensure_minimax_native(cache_root, *, work_root="/content/koboldcpp-minimax-native"):
+    path = globals().get("NATIVE_LOG_PATH")
+    if path is None or not Path(path).is_file():
+        set_native_log_path(Path(work_root) / "logs/session.log", cache_root)
+    try:
+        return _ensure_minimax_native(cache_root, work_root=work_root)
+    finally:
+        save_native_log()
+
+
+def _ensure_minimax_native(cache_root, *, work_root):
     build_info = minimax_build_info()
     identity = hashlib.sha256(json.dumps(build_info, sort_keys=True).encode()).hexdigest()[:16]
     work = Path(work_root) / identity
     runtime = work / "runtime"
     stamp = runtime / "native-build.json"
     if stamp.is_file() and json.loads(stamp.read_text()) == build_info and (runtime / "koboldcpp_cublas.so").is_file():
+        native_log(f"Dùng lại bản build trong runtime: {runtime}")
         return [sys.executable, str(runtime / "koboldcpp.py"), "--skiplauncher"], str(runtime)
     archive = Path(cache_root) / "runtime" / f"koboldcpp-minimax-{identity}.tar.gz"
     receipt = archive.with_suffix(".sha256.json")
     work.mkdir(parents=True, exist_ok=True)
+    native_log(f"Thư mục build: {work}")
     if archive.is_file() and receipt.is_file():
         record = json.loads(receipt.read_text())
-        if record.get("build") != build_info or native_file_sha256(archive) != record.get("sha256"):
+        if record.get("build") != build_info or native_file_sha256(archive, label="SHA256 cache build Drive") != record.get("sha256"):
             raise RuntimeError(f"Cache build native sai SHA256: {archive}; chuyển file lỗi đi rồi chạy lại.")
-        with tarfile.open(archive) as package:
+        with native_stage("Giải nén bản build từ Drive"), tarfile.open(archive) as package:
             package.extractall(runtime, filter="data")
         if not stamp.is_file() or json.loads(stamp.read_text()) != build_info or not (runtime / "koboldcpp_cublas.so").is_file():
             raise RuntimeError("Cache native thiếu file; không khởi chạy.")
-        print("Dùng lại bản KoboldCpp native đã build trên Drive.", flush=True)
+        native_log("Dùng lại bản KoboldCpp native đã build trên Drive.")
     else:
         if any(shutil.which(tool) is None for tool in ("make", "g++", "git")):
-            subprocess.run(["apt-get", "update", "-qq"], check=True)
-            subprocess.run(["apt-get", "install", "-y", "-qq", "build-essential", "git"], check=True)
+            run_logged_command(["apt-get", "update", "-qq"], label="Cập nhật danh sách gói build")
+            run_logged_command(["apt-get", "install", "-y", "-qq", "build-essential", "git"], label="Cài công cụ build")
         source_archive = native_download(
             f"https://codeload.github.com/wbruna/llama.cpp/tar.gz/{NATIVE_KCPP_REF}",
             work / "kobold-source.tar.gz", NATIVE_SOURCE_SHA256)
@@ -164,36 +295,38 @@ def ensure_minimax_native(cache_root, *, work_root="/content/koboldcpp-minimax-n
         if not patch_stamp.is_file():
             if source.exists():
                 shutil.rmtree(source)
-            with tarfile.open(source_archive) as package:
+            with native_stage("Giải nén mã nguồn KoboldCpp"), tarfile.open(source_archive) as package:
                 package.extractall(work, filter="data")
             apply_native_sd_patch(source, patch)
             patch_stamp.write_text(NATIVE_SD_REF)
-        print("Build KoboldCpp CUDA + H3 Image cho GPU hiện tại; lần đầu có thể mất nhiều phút.", flush=True)
+        else:
+            native_log("Mã nguồn đã patch; make sẽ dùng lại các object đã build xong nếu có.")
         # Compile only this GPU architecture. Cache the completed runtime on Drive.
         sm = build_info["sm"]
         nvcc_flags = ("--forward-unknown-to-host-compiler -use_fast_math -extended-lambda "
                       f"-gencode arch=compute_{sm},code=sm_{sm} -DKCPP_LIMIT_CUDA_MAX_ARCH={sm}0")
-        subprocess.run(["make", "-j2", "koboldcpp_cublas", "LLAMA_CUBLAS=1", "LLAMA_NO_LLAMAFILE=1",
-                        "NVCCFLAGS=" + nvcc_flags], cwd=source, check=True)
+        run_logged_command(["make", "-j2", "koboldcpp_cublas", "LLAMA_CUBLAS=1", "LLAMA_NO_LLAMAFILE=1",
+                            "NVCCFLAGS=" + nvcc_flags], cwd=source, label="Build KoboldCpp CUDA + H3 Image")
         library = source / "koboldcpp_cublas.so"
         if not library.is_file():
             raise RuntimeError("Build chưa tạo koboldcpp_cublas.so.")
-        runtime.mkdir(parents=True, exist_ok=True)
-        for path in source.glob("*.py"):
-            shutil.copy2(path, runtime / path.name)
-        shutil.copy2(library, runtime / library.name)
-        shutil.copytree(source / "embd_res", runtime / "embd_res", dirs_exist_ok=True)
-        configure_minimax_stableui(runtime)
-        stamp.write_text(json.dumps(build_info, sort_keys=True))
+        with native_stage("Chuẩn bị runtime và preset StableUI"):
+            runtime.mkdir(parents=True, exist_ok=True)
+            for path in source.glob("*.py"):
+                shutil.copy2(path, runtime / path.name)
+            shutil.copy2(library, runtime / library.name)
+            shutil.copytree(source / "embd_res", runtime / "embd_res", dirs_exist_ok=True)
+            configure_minimax_stableui(runtime)
+            stamp.write_text(json.dumps(build_info, sort_keys=True))
         archive.parent.mkdir(parents=True, exist_ok=True)
         partial = archive.with_suffix(".gz.part")
-        with tarfile.open(partial, "w:gz") as package:
+        with native_stage("Nén và lưu build vào Drive"), tarfile.open(partial, "w:gz") as package:
             for path in sorted(runtime.iterdir()):
                 package.add(path, arcname=path.name)
-        digest = native_file_sha256(partial)
+        digest = native_file_sha256(partial, label="SHA256 bản build mới")
         partial.replace(archive)
         temporary_receipt = receipt.with_suffix(".json.tmp")
         temporary_receipt.write_text(json.dumps({"build": build_info, "sha256": digest}))
         temporary_receipt.replace(receipt)
-        print(f"Đã lưu build native lên Drive: {archive}", flush=True)
+        native_log(f"Đã lưu build native lên Drive: {archive}")
     return [sys.executable, str(runtime / "koboldcpp.py"), "--skiplauncher"], str(runtime)
