@@ -18,6 +18,21 @@ File chứa mật khẩu dạng văn bản, chỉ dùng riêng trên máy và đ
 Không chia sẻ file, không đưa mật khẩu vào prompt hoặc tham số dòng lệnh.
 Khi link/mật khẩu phiên Colab thay đổi, chạy lại `configure`.
 
+### Launcher dừng ở bước kiểm tra Basic Auth
+
+Nếu log đã có `Starting server` rồi báo lỗi xác minh đăng nhập ngrok, ComfyUI đã
+khởi động; lỗi nằm ở truy cập endpoint công khai. Bản notebook mới giữ mã HTTP và
+`ERR_NGROK_...` trong thông báo thay vì gộp mọi phản hồi thành lỗi Basic Auth.
+Launcher chờ tối đa khoảng 60 giây cho lỗi tunnel tạm thời; lỗi mật khẩu, quota
+hoặc cấu hình được báo riêng. Không chuyển tiếp thông tin đăng nhập qua redirect.
+Endpoint phải chặn truy cập không đăng nhập rồi chấp nhận đúng thông tin đăng nhập
+trước khi launcher in link; nếu không, launcher vẫn cleanup và dừng.
+
+Mở lại đúng bản `comfy.ipynb` đã cập nhật rồi Run all; không cần thêm cell.
+Nếu mở từ GitHub, cần push bản mới trước. Khi có HTTP 402/403/429 hoặc mã ngrok khác,
+kiểm tra Usage/Limits và endpoint ở dashboard theo mã lỗi. Log cũ chỉ báo lỗi chung
+không đủ để phân biệt tunnel chưa sẵn sàng với quota/cấu hình.
+
 Agent có thể dùng cấu hình đó mà không đọc hoặc in nội dung file:
 
 ```sh
