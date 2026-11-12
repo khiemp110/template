@@ -17,3 +17,7 @@ web-build/
 .comfy-agent.json.*
 comfy-results/
 __pycache__/
+
+# Local ComfyUI workflows and tests
+/workflows/
+/tests/

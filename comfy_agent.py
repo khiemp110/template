@@ -134,6 +134,8 @@ class ComfyClient:
             if 'text/html' in content_type.lower():
                 raise ClientError('Server trả HTML thay vì file; kiểm tra tunnel.')
             return body
+        if not body:
+            return None  # Some successful control routes (for example /free) have no JSON body.
         try:
             return json.loads(body)
         except (ValueError, UnicodeError):

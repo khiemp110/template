@@ -192,3 +192,65 @@ ComfyUI đang chạy trên Colab theo yêu cầu tạo ảnh của tôi.
 
 Yêu cầu tạo ảnh của tôi: [điền mô tả, số lượng, kích thước, workflow/model nếu có].
 ```
+
+## MiniMax H3 Image: ảnh eye_test
+
+Bộ file tối thiểu được lấy từ bản đóng gói chính thức Comfy-Org, tổng khoảng 37,8 GB:
+
+| Tên trong catalog | Thư mục | File |
+| --- | --- | --- |
+| `minimax-h3-image` | diffusion_models | minimax_h3_image_pruned_int8_convrot.safetensors |
+| `minimax-h3-text-nvfp4` | text_encoders | qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors |
+| `minimax-h3-image-vae` | vae | minimax_h3_image_vae_fp16.safetensors |
+
+Encoder NVFP4 này không yêu cầu GPU Blackwell. Không tải thêm prompt enhancer:
+workflow dùng prompt tiếng Anh đã viết chi tiết. Revision, size và SHA256 nằm trong catalog.
+
+```sh
+python3 comfy_agent.py install-model minimax-h3-image --wait
+python3 comfy_agent.py install-model minimax-h3-text-nvfp4 --wait
+python3 comfy_agent.py install-model minimax-h3-image-vae --wait
+python3 comfy_agent.py run workflows/eye_test_minimax_h3_image_api.json --wait --interval 10
+```
+
+Workflow riêng cho model Image: 2048×2048, seed 20261112, 6 bước, CFG 1, Euler/simple.
+Model đã được distill CFG; không dùng negative prompt riêng hoặc thông số sampler SDXL.
+`workflows/eye_test_minimax_h3_image.json` là bản mở được trên canvas, cũng được lưu vào
+userdata/workflows. File ảnh đầu ra dùng tiền tố `eye_test_minimax_h3_image`.
+
+Nguồn:
+- https://huggingface.co/Comfy-Org/MiniMax-H3-Image
+- https://huggingface.co/Comfy-Org/MiniMax-H3
+- https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_minimax_h3_image_t2i.json
+
+## MiniMax H3 video: animate ảnh eye_test
+
+Dùng FL2VA INT8 cho text-to-video hoặc first/last-frame image-to-video. Bộ tải thêm
+khoảng 26,3 GB; dùng lại `minimax-h3-text-nvfp4` đã cài ở phần model Image.
+
+```sh
+python3 comfy_agent.py install-model minimax-h3-video --wait
+python3 comfy_agent.py install-model minimax-h3-video-vae --wait
+python3 comfy_agent.py install-model minimax-h3-audio-vae --wait
+python3 comfy_agent.py install-model minimax-h3-video-turbo4 --wait
+python3 comfy_agent.py run workflows/eye_test_minimax_h3_video_api.json --wait --interval 10 --timeout 2400
+```
+
+Workflow dùng ảnh `eye_test_minimax_h3_image_00001_.png [output]` làm first frame,
+đọc trực tiếp từ output Drive. Nếu dùng ảnh khác, đổi input `114.image` sang tên ảnh
+hợp lệ. Hậu tố `[output]` là cơ chế đường dẫn chuẩn của LoadImage.
+
+- Video 640×640, 124 frame ở 24 fps (khoảng 5,17 giây).
+- FL2VA + Turbo LoRA 4 bước, sampler `res_multistep`, scheduler `simple`, seed 20261112.
+- Video VAE và audio VAE riêng; ghép video với native audio vào MP4/H.264.
+- Xuất thêm ảnh xem trước đầu/giữa/cuối từ batch frame để kiểm tra chuyển động.
+- Tiền tố kết quả: `video/eye_test_minimax_h3_video`.
+- Bản canvas: `workflows/eye_test_minimax_h3_video.json`, được lưu trong userdata/workflows.
+
+Đây là workflow thử ở độ phân giải vừa phải cho L4, không phải preset chất lượng tối đa.
+Không cần tải Ref2VA để chạy T2V/I2V này; đó là một model riêng cho tham chiếu đa phương tiện.
+
+Nguồn:
+- https://docs.comfy.org/tutorials/video/minimax/minimax-h3
+- https://huggingface.co/Comfy-Org/MiniMax-H3
+- https://github.com/Comfy-Org/workflow_templates/blob/main/templates/video_minimax_h3_i2v.json
