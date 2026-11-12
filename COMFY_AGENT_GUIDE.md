@@ -1,0 +1,194 @@
+# Điều khiển ComfyUI bằng Python
+
+`comfy_agent.py` dùng Python 3.10+ và thư viện chuẩn, không cần pip, MCP hay custom node.
+API tham khảo: https://docs.comfy.org/development/comfyui-server/comms_routes
+
+## Kết nối lần đầu
+
+Giữ cell cuối của notebook Colab chạy. Trong Terminal trên máy Mac:
+
+```sh
+cd /Users/khiemp/unlock/template
+python3 comfy_agent.py configure --url https://mutable-glue-usage.ngrok-free.dev
+```
+
+Nhập đúng `COMFYUI_PASSWORD` đã dùng ở Colab vào ô ẩn. Username mặc định là `comfyui`.
+Script kiểm tra đăng nhập thành công rồi mới lưu `.comfy-agent.json`, quyền `600`.
+File chứa mật khẩu dạng văn bản, chỉ dùng riêng trên máy và đã được thêm vào `.gitignore`.
+Không chia sẻ file, không đưa mật khẩu vào prompt hoặc tham số dòng lệnh.
+Khi link/mật khẩu phiên Colab thay đổi, chạy lại `configure`.
+
+Agent có thể dùng cấu hình đó mà không đọc hoặc in nội dung file:
+
+```sh
+python3 comfy_agent.py check
+python3 comfy_agent.py models
+python3 comfy_agent.py models checkpoints
+python3 comfy_agent.py models diffusion_models
+python3 comfy_agent.py nodes KSampler
+python3 comfy_agent.py queue
+```
+
+Cũng có thể cung cấp `COMFYUI_URL`, `COMFYUI_USERNAME`, `COMFYUI_PASSWORD` qua môi trường
+thay cho file; các giá trị môi trường được ưu tiên. Không ghi giá trị bí mật vào lịch sử shell.
+Với cấu hình ở nơi khác: `python3 comfy_agent.py --config /path/to/private.json check`.
+
+## Chạy workflow
+
+Kiểm tra toàn bộ chu trình gửi → chạy → lưu → tải bằng một ô màu 64×64, không cần model:
+
+```sh
+python3 comfy_agent.py run workflows/connection_test_api.json --wait
+```
+
+Workflow này tạo một file `agent_connection_test_*.png` trong output của ComfyUI
+(Drive với notebook hiện tại), đồng thời tải một bản vào `comfy-results/` trên máy.
+
+Xuất workflow từ ComfyUI dưới dạng **API JSON** (tìm mục Export (API)/Save (API Format)
+trong menu workflow; tùy phiên bản cần bật developer mode). JSON hợp lệ chứa các node
+có `class_type` và `inputs`. JSON sơ đồ giao diện chứa danh sách `nodes` không dùng trực tiếp được.
+
+```sh
+python3 comfy_agent.py run workflow_api.json --wait --output comfy-results
+```
+
+Sửa tham số trên bản gửi đi, không thay đổi file nguồn. ID node phụ thuộc workflow thực tế:
+
+```sh
+python3 comfy_agent.py run workflow_api.json \
+  --set '6.text="a small cabin in a pine forest, sunrise"' \
+  --set '3.seed=42' --set '3.steps=20' \
+  --wait --timeout 1800
+```
+
+Mỗi `--set` dùng cú pháp `NODE.INPUT=JSON`; chuỗi cần dấu ngoặc kép JSON.
+Không tự áp dụng ví dụ ID 3 hoặc 6 nếu workflow dùng ID khác.
+Nếu không có `--wait`, script trả `prompt_id` ngay sau khi gửi:
+
+```sh
+python3 comfy_agent.py status PROMPT_ID
+python3 comfy_agent.py download PROMPT_ID --output comfy-results
+```
+
+Ảnh tải về nằm trong `comfy-results/`; file trên Drive vẫn do node SaveImage của workflow quyết định.
+`--wait` lấy trạng thái bằng polling HTTP, mặc định 3 giây/lượt; có thể tăng `--interval`
+để giảm request ngrok. Hết thời gian chờ hoặc dừng client không hủy tác vụ trên server.
+Không tự retry POST `/prompt`. Nếu mất kết nối lúc gửi, kiểm tra queue/history trước khi gửi lại.
+Workflow qua API không tự thay thế canvas đang mở trong trình duyệt.
+
+## Tải model nền: không dừng ComfyUI mỗi lần
+
+Notebook `comfy.ipynb` đã tích hợp bộ tải nền và tự bật cùng launcher.
+Agent gửi manifest qua userdata có Basic Auth, worker tải file trên Colab và giữ model trên Drive.
+Không có cổng công khai hoặc tunnel bổ sung. Mỗi lần chỉ tải một model để tránh tranh băng thông.
+Bộ tải dùng thư viện chuẩn và curl sẵn có; không cài custom node hoặc thay bộ PyTorch.
+
+### Chạy bản notebook mới — không thêm cell
+
+1. Dùng đúng file `comfy.ipynb` đã cập nhật trong workspace này. Có thể upload trực tiếp file
+   lên Colab; nếu mở từ GitHub thì cần push bản mới rồi mở lại đúng notebook đó.
+   Tab Colab đang mở với code cũ không tự nhận thay đổi từ máy/GitHub.
+2. Stop cell cuối của phiên cũ để tránh trùng cổng. Giữ runtime hiện tại nếu vẫn hoạt động.
+3. Mở bản notebook mới, chọn GPU rồi **Runtime → Run all**. Bộ tải nền đã được nhúng ngay
+   trong notebook, không cần upload `model_download_worker.py` hoặc thêm cell thủ công.
+4. Cấp quyền Drive nếu Colab yêu cầu, nhập token và cùng `COMFYUI_PASSWORD` đã cấu hình
+   trên máy. Nếu dùng Secrets thì notebook đọc tự động như trước.
+5. Đợi `MODEL_DOWNLOADER_READY` và link ComfyUI. Agent có thể kiểm tra bằng `model-worker`.
+
+Notebook lưu phần code tích hợp. Model và dữ liệu được lưu trên Drive; khi runtime mới được
+cấp, chạy lại notebook sẽ bật lại worker và dùng các model đã tải trước đó.
+Không cần chạy lại bộ cài chỉ để thêm checkpoint/LoRA/VAE khi phiên đang hoạt động.
+
+### Agent tải model trong khi ComfyUI vẫn chạy
+
+```sh
+python3 comfy_agent.py model-worker
+python3 comfy_agent.py install-model sdxl-base --wait
+```
+
+Không cần Stop, thêm cell hoặc khởi động lại ComfyUI cho mỗi checkpoint/LoRA/VAE mới.
+Agent có thể dùng `models`/`nodes` để đọc lại danh sách sau khi tải. Trên giao diện,
+có thể cần refresh danh sách model để chọn file mới. Cài thêm custom node hoặc nâng cấp
+ComfyUI là việc khác và vẫn có thể cần khởi động lại.
+
+`install-model` in `job_id` ngay khi gửi. Có thể tiếp tục theo dõi mà không gửi lại:
+
+```sh
+python3 comfy_agent.py model-status JOB_ID --wait
+```
+
+Dừng client không hủy tải; worker tiếp tục trong runtime. Khi runtime bị thu hồi thì tải dừng.
+Các job đang tải dở có thể tiếp tục khi chạy lại notebook với cùng Drive; job đã báo `failed`
+cần kiểm tra nguyên nhân trước khi gửi job mới. File `.part` ở `models/.agent-downloads`.
+
+### Model khác
+
+`models/catalog.json` có các manifest đã chuẩn bị. Thêm model vào catalog hoặc dùng:
+
+```sh
+python3 comfy_agent.py install-model --manifest model_manifest.json --wait
+```
+
+Manifest bắt buộc: `repo_id`, commit `revision` đủ 40 ký tự, `source_filename`, `filename`,
+`folder`, `size` (byte), `sha256`. Lấy thông tin từ nguồn phát hành model trước khi gửi.
+Chỉ hỗ trợ file `.safetensors` công khai trên Hugging Face; chưa hỗ trợ model gated,
+Civitai, file GGUF hoặc cài code. Không gửi token vào manifest.
+Các thư mục hỗ trợ gồm checkpoints, loras, vae, text_encoders, diffusion_models,
+clip_vision, embeddings, controlnet, upscale_models, vae_approx.
+
+Model chỉ được đưa vào thư mục đích sau khi kiểm tra đủ kích thước và SHA256.
+Không ghi đè model có sẵn khác nội dung. Mỗi file tối đa 100 GB, vẫn cần đủ dung lượng Drive.
+
+## Ảnh ngôi nhà + khinh khí cầu
+
+Model: [SDXL Base 1.0 của Stability AI](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0),
+checkpoint `sd_xl_base_1.0.safetensors`, 6.938.078.334 byte; revision và SHA256 ở catalog.
+
+- `workflows/eye_test_house_balloon_api.json`: gửi qua script Python.
+- `workflows/eye_test_house_balloon.json`: mở trên canvas, đã lưu vào userdata/workflows.
+
+```sh
+python3 comfy_agent.py install-model sdxl-base --wait
+python3 comfy_agent.py run workflows/eye_test_house_balloon_api.json --wait --interval 5
+```
+
+Workflow dùng SDXL, 1152×896, 28 bước, CFG 6, DPM++ 2M/Karras, seed 20261112.
+Ảnh mang tiền tố `eye_test_house_balloon` trong output Drive và được tải về `comfy-results/`.
+Đây là ảnh phong cảnh gợi hình trong máy đo mắt, không phải ảnh chuẩn dùng cho phép đo.
+
+Lưu/cập nhật workflow giao diện vào danh sách workflow của server:
+
+```sh
+python3 comfy_agent.py upload-userdata workflows/eye_test_house_balloon.json workflows/eye_test_house_balloon.json
+```
+
+## Prompt dùng cho agent khác
+
+Sao chép đoạn sau và thay đường dẫn workspace nếu cần:
+
+```text
+Bạn có quyền dùng script /Users/khiemp/unlock/template/comfy_agent.py để điều khiển
+ComfyUI đang chạy trên Colab theo yêu cầu tạo ảnh của tôi.
+
+1. Đọc COMFY_AGENT_GUIDE.md cùng thư mục. Dùng python3 comfy_agent.py --help khi cần.
+2. Chạy check trước. Script tự đọc cấu hình riêng .comfy-agent.json hoặc biến môi trường.
+   Không đọc/in file cấu hình, mật khẩu, Authorization hoặc biến môi trường chứa bí mật.
+   Nếu chưa cấu hình hoặc HTTP 401, nhờ tôi chạy configure trong Terminal với ô nhập ẩn;
+   không yêu cầu tôi gửi mật khẩu vào chat.
+3. Liệt kê models và xem schema node bằng nodes để biết model/input thực tế.
+   Dùng workflow API JSON tôi cung cấp hoặc tạo workflow từ schema và model đang có.
+   Không đoán tên checkpoint, node hoặc ID node; chỉ tải model/cài custom node khi tôi yêu cầu.
+   Nếu cần tải model, kiểm tra model-worker rồi dùng install-model --wait; theo dõi job_id
+   bằng model-status. Không thêm cell hoặc Stop ComfyUI cho mỗi lần tải model.
+4. Sửa prompt/seed/kích thước bằng --set NODE.INPUT=JSON hoặc tạo file API JSON riêng.
+   Bắt đầu bằng một ảnh để kiểm tra, sau đó mới chạy số lượng tôi yêu cầu.
+5. Dùng run WORKFLOW --wait --output comfy-results. Lưu prompt_id ngay khi được trả về.
+   Với tác vụ lâu, dùng status PROMPT_ID và download PROMPT_ID để tiếp tục theo dõi.
+6. Nếu timeout/mất kết nối, kiểm tra queue và status trước; không gửi lại mù quáng.
+   Không dừng/xóa hàng đợi của tác vụ khác. Không thay đổi dữ liệu trên Drive ngoài yêu cầu.
+7. Xem ảnh đã tải về nếu có công cụ xem ảnh, đối chiếu yêu cầu, điều chỉnh có căn cứ.
+   Báo file kết quả, prompt_id và các thông số chính. Nếu thiếu kết nối/model/workflow,
+   nói rõ thiếu gì, không tuyên bố đã chạy thành công.
+
+Yêu cầu tạo ảnh của tôi: [điền mô tả, số lượng, kích thước, workflow/model nếu có].
+```

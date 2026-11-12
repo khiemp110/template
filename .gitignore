@@ -11,3 +11,9 @@ web-build/
 
 # macOS
 .DS_Store
+
+# Local ComfyUI connection credentials and generated files
+.comfy-agent.json
+.comfy-agent.json.*
+comfy-results/
+__pycache__/
