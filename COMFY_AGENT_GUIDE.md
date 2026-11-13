@@ -3,6 +3,35 @@
 `comfy_agent.py` dùng Python 3.10+ và thư viện chuẩn, không cần pip, MCP hay custom node.
 API tham khảo: https://docs.comfy.org/development/comfyui-server/comms_routes
 
+## Nạp trước preset và thời gian chạy
+
+Cell cấu hình đầu của `comfy.ipynb` có form Colab:
+
+- `PRELOAD_MODELS`: checkbox nạp trước (mặc định tắt).
+- `MODEL_PRESET`: chọn `MiniMax H3 Image` hoặc `MiniMax H3 Video (Turbo 4 bước)`.
+- `MAX_SESSION_HOURS`: số giờ hẹn dừng; mặc định `0` để không hẹn giờ. Đặt `4` nếu muốn dừng sau 4 giờ.
+
+Khi bật nạp trước, launcher đợi ComfyUI khởi động rồi chạy warm-up **1 bước** trong
+chính tiến trình ComfyUI trước khi mở link ngrok. Preset ảnh chuẩn bị diffusion model,
+Qwen text encoder và image VAE; preset video chuẩn bị diffusion model, text encoder,
+Turbo LoRA cùng video/audio VAE. Model cần được tải trên Drive từ trước; thiếu model
+thì notebook báo và vẫn mở giao diện để xử lý. Không tự tải thêm model.
+
+Warm-up ảnh dùng 512×512; video dùng 640×352, 124 frame. Preview chỉ nằm trong temp,
+không ghi ảnh/video thử vào output Drive. Một bước chỉ để khởi tạo, không phải preset
+chất lượng. Phần code được nhúng sẵn, không cần upload thêm `model_preloader.py`.
+
+Thời gian đọc model và khởi tạo được chuyển sang lúc mở phiên, không biến mất.
+ComfyUI tự quản lý RAM/VRAM; đây không phải khóa toàn bộ model trong VRAM. Đổi model,
+LoRA, kích thước hoặc thiếu RAM/VRAM vẫn có thể cần nạp/compile thêm. Chọn một preset
+phù hợp với tác vụ sắp dùng. Chạy lại cell cấu hình và launcher sau khi đổi lựa chọn;
+dừng phiên cũ trước khi chạy lại launcher.
+
+Giới hạn 4 giờ trước đây là do launcher đặt, không phải yêu cầu bắt buộc của Colab.
+`MAX_SESSION_HOURS = 0` chỉ bỏ hẹn giờ của launcher; Colab vẫn có giới hạn tài nguyên,
+thời gian sống runtime và idle riêng theo tài khoản/tình trạng dịch vụ.
+Bấm Stop và Disconnect and delete runtime khi dùng xong GPU.
+
 ## Kết nối lần đầu
 
 Giữ cell cuối của notebook Colab chạy. Trong Terminal trên máy Mac:
