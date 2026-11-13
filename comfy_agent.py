@@ -301,6 +301,11 @@ def load_workflow(path, overrides):
         if node_id not in workflow or name not in workflow[node_id]['inputs']:
             raise ClientError(f'Không tìm thấy input {node_id}.{name} trong workflow.')
         workflow[node_id]['inputs'][name] = value
+    for node in workflow.values():
+        prefix = node['inputs'].get('filename_prefix')
+        if (node['class_type'] == 'SaveImage' and isinstance(prefix, str)
+                and '/' not in prefix and '\\' not in prefix):
+            node['inputs']['filename_prefix'] = 'image/' + prefix
     return workflow
 
 

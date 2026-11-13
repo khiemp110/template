@@ -56,7 +56,7 @@ Kiểm tra toàn bộ chu trình gửi → chạy → lưu → tải bằng mộ
 python3 comfy_agent.py run workflows/connection_test_api.json --wait
 ```
 
-Workflow này tạo một file `agent_connection_test_*.png` trong output của ComfyUI
+Workflow này tạo một file `image/agent_connection_test_*.png` trong output của ComfyUI
 (Drive với notebook hiện tại), đồng thời tải một bản vào `comfy-results/` trên máy.
 
 Xuất workflow từ ComfyUI dưới dạng **API JSON** (tìm mục Export (API)/Save (API Format)
@@ -85,7 +85,12 @@ python3 comfy_agent.py status PROMPT_ID
 python3 comfy_agent.py download PROMPT_ID --output comfy-results
 ```
 
-Ảnh tải về nằm trong `comfy-results/`; file trên Drive vẫn do node SaveImage của workflow quyết định.
+Ảnh tải về nằm trong `comfy-results/`. Trên Drive, ảnh tạo được lưu trong
+`MyDrive/ComfyUI/output/image/`. Script tự thêm `image/` cho `filename_prefix` của
+node SaveImage nếu tiền tố chưa có thư mục, kể cả sau khi áp dụng `--set`.
+Tiền tố đã có thư mục (như video hoặc ảnh chỉnh sửa) được dùng nguyên trạng.
+Khi tạo workflow trên giao diện ComfyUI, đặt `filename_prefix` của SaveImage là
+`image/tên_ảnh`; các workflow tạo ảnh mẫu trong `workflows/` đã dùng tiền tố này.
 `--wait` lấy trạng thái bằng polling HTTP, mặc định 3 giây/lượt; có thể tăng `--interval`
 để giảm request ngrok. Hết thời gian chờ hoặc dừng client không hủy tác vụ trên server.
 Không tự retry POST `/prompt`. Nếu mất kết nối lúc gửi, kiểm tra queue/history trước khi gửi lại.
@@ -168,7 +173,7 @@ python3 comfy_agent.py run workflows/eye_test_house_balloon_api.json --wait --in
 ```
 
 Workflow dùng SDXL, 1152×896, 28 bước, CFG 6, DPM++ 2M/Karras, seed 20261112.
-Ảnh mang tiền tố `eye_test_house_balloon` trong output Drive và được tải về `comfy-results/`.
+Ảnh mang tiền tố `image/eye_test_house_balloon` trong output Drive và được tải về `comfy-results/`.
 Đây là ảnh phong cảnh gợi hình trong máy đo mắt, không phải ảnh chuẩn dùng cho phép đo.
 
 Lưu/cập nhật workflow giao diện vào danh sách workflow của server:
@@ -231,7 +236,7 @@ python3 comfy_agent.py run workflows/eye_test_minimax_h3_image_api.json --wait -
 Workflow riêng cho model Image: 2048×2048, seed 20261112, 6 bước, CFG 1, Euler/simple.
 Model đã được distill CFG; không dùng negative prompt riêng hoặc thông số sampler SDXL.
 `workflows/eye_test_minimax_h3_image.json` là bản mở được trên canvas, cũng được lưu vào
-userdata/workflows. File ảnh đầu ra dùng tiền tố `eye_test_minimax_h3_image`.
+userdata/workflows. File ảnh đầu ra dùng tiền tố `image/eye_test_minimax_h3_image`.
 
 Nguồn:
 - https://huggingface.co/Comfy-Org/MiniMax-H3-Image
@@ -253,7 +258,9 @@ python3 comfy_agent.py run workflows/eye_test_minimax_h3_video_api.json --wait -
 
 Workflow dùng ảnh `eye_test_minimax_h3_image_00001_.png [output]` làm first frame,
 đọc trực tiếp từ output Drive. Nếu dùng ảnh khác, đổi input `114.image` sang tên ảnh
-hợp lệ. Hậu tố `[output]` là cơ chế đường dẫn chuẩn của LoadImage.
+hợp lệ. Với ảnh mới trong thư mục riêng, dùng dạng
+`image/eye_test_minimax_h3_image_00001_.png [output]`.
+Hậu tố `[output]` là cơ chế đường dẫn chuẩn của LoadImage.
 
 - Video 640×640, 124 frame ở 24 fps (khoảng 5,17 giây).
 - FL2VA + Turbo LoRA 4 bước, sampler `res_multistep`, scheduler `simple`, seed 20261112.
